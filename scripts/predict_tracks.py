@@ -72,6 +72,21 @@ class SGANNode(object):
             else:
                 self.tracked_persons[track.track_id] = deque([track], maxlen=8)
 
+        current_ids = [track.track_id for track in msg.tracks]
+        msg_arr = MarkerArray()
+        for k in self.tracked_persons.copy().keys():
+            if k not in current_ids:
+                if self.visualise:
+                    msg = Marker()
+                    msg.action = msg.DELETEALL
+                    msg.ns = "track_" + str(k)
+                    msg_arr.markers.append(copy(msg))
+
+                del self.tracked_persons[k]
+
+        if self.visualise:
+            self.predictions_marker_pub.publish(msg_arr)
+
         if type(self.tracked_persons) is dict:
             self.tracked_persons = OrderedDict(
                 sorted(self.tracked_persons.items(), key=lambda t: t[0]))
