@@ -5,6 +5,7 @@ import rospy
 
 from attrdict import AttrDict
 from collections import deque, OrderedDict
+from copy import copy
 
 from sgan.models import TrajectoryGenerator
 from sgan.utils import relative_to_abs
@@ -26,12 +27,13 @@ class SGANNode(object):
         checkpoint = torch.load(model)
         self.num_samples = rospy.get_param("num_samples", 20)
         self.seq_len = rospy.get_param("seq_len", 8)
+        self.visualise = rospy.get_param("visualise", True)
         self.generator = self.get_generator(checkpoint)
         self.args_ = AttrDict(checkpoint['args'])
         self.tracked_persons_sub = rospy.Subscriber(
             "/spencer/perception/tracked_persons", TrackedPersons, self.tracked_persons_cb, queue_size=3)
         # self.predicted_tracks_pub = rospy.Publisher("/sgan/predictions", TBD, queue_size=1)
-        self.predictions_marker_pub = rospy.Publisher("/sgan/predictions_marker", Marker, queue_size=1)
+        self.predictions_marker_pub = rospy.Publisher("/sgan/predictions_marker", MarkerArray, queue_size=1)
         self.tracked_persons = {}
         self.max_age = rospy.Duration(10)
 
@@ -74,63 +76,79 @@ class SGANNode(object):
             self.tracked_persons = OrderedDict(
                 sorted(self.tracked_persons.items(), key=lambda t: t[0]))
 
-        # for key in self.tracked_persons.keys():
-        #     if self.tracked_persons[key].:
-
     def predict_tracks(self):
         """
         docstring
         """
+        curr_seq = np.zeros((self.seq_len, len(self.tracked_persons), 2))
+        curr_seq_rel = np.zeros(curr_seq.shape)
+        valid_tracks = 0
 
-        curr_seq = np.zeros(self.seq_len, )
-        for id, tracks, i in enumerate(self.tracked_persons.copy().items()):  # copy is needed, because the subscriber can mutate the dict
-            if len(tracks) != self.seq_len:
-                continue
-            msg = Marker()
-            msg.header.frame_id = "odom"
-            msg.ns = "track_" + str(id)
-            msg.id = 0
-            msg.action = msg.ADD
-            msg.pose.orientation.w = 1.0
-            msg.type = msg.LINE_STRIP
-            msg.points = []
-            msg.scale.x = 0.05
-            msg.color.a = 1.
-            msg.color.r = 1.
-            msg.color.g = 0.
-            msg.color.b = 0.
-
-            with torch.no_grad():
+        with torch.no_grad():
+            # copy is needed, because the subscriber callback can mutate the dict
+            for id, tracks in self.tracked_persons.copy().items():
+                if len(tracks) != self.seq_len:
+                    continue
                 obs_traj = np.array([[track.pose.pose.position.x, track.pose.pose.position.y] for track in tracks])
                 obs_traj_rel = np.zeros(obs_traj.shape)
                 obs_traj_rel[1:, :] = obs_traj[1:, :] - obs_traj[:-1, :]
-                obs_traj = obs_traj[:, :, np.newaxis]
-                obs_traj = obs_traj.reshape(self.seq_len, 1, 2)
-                obs_traj_rel = obs_traj_rel[:, :, np.newaxis]
-                obs_traj_rel = obs_traj_rel.reshape(obs_traj.shape)
-                obs_traj = torch.from_numpy(obs_traj).float().cuda()
-                obs_traj_rel = torch.from_numpy(obs_traj_rel).float().cuda()
-                rospy.logdebug_throttle(1, str(id) + ": " + str(obs_traj))
-                rospy.logdebug_throttle(1, "shape: " + str(obs_traj.shape))
-                l = [1]
+                curr_seq[:, valid_tracks, :] = obs_traj
+                curr_seq_rel[:, valid_tracks, :] = obs_traj_rel
+                valid_tracks = valid_tracks + 1
+
+            if valid_tracks > 0:
+                curr_seq = torch.from_numpy(curr_seq[:, :valid_tracks, :]).float().cuda()
+                curr_seq_rel = torch.from_numpy(curr_seq_rel[:, :valid_tracks, :]).float().cuda()
+                l = [valid_tracks]
                 cum_start_idx = [0] + np.cumsum(l).tolist()
                 seq_start_end = [
                     (start, end)
                     for start, end in zip(cum_start_idx, cum_start_idx[1:])
                 ]
                 seq_start_end = torch.Tensor(seq_start_end).type(torch.int).cuda()
-                msg.points = []
+                pred_samples = dict.fromkeys(self.tracked_persons.keys(), [])
+                track_ids = list(self.tracked_persons.keys())
+
                 for _ in range(self.num_samples):
-                    pred_traj_fake_rel = self.generator(obs_traj, obs_traj_rel, seq_start_end)
-                    pred_traj_fake = relative_to_abs(pred_traj_fake_rel, obs_traj[-1])
-                    msg.points.extend([Point(pred[0][0], pred[0][1], 0) for pred in pred_traj_fake.tolist()])
-                self.predictions_marker_pub.publish(msg)
+                    pred_traj_fake_rel = self.generator(curr_seq, curr_seq_rel, seq_start_end)
+                    pred_traj_fake = relative_to_abs(pred_traj_fake_rel, curr_seq[-1])
+                    for ped_id, pred in enumerate(pred_traj_fake.transpose(1, 0).tolist()):
+                        pred_samples[track_ids[ped_id]].extend(
+                            [Point(pred[idx][0], pred[idx][1], 0) for idx in range(0, self.seq_len)])
+
+                if self.visualise:
+                    self.visualise_predictions(pred_samples)
+
+    def visualise_predictions(self, predictions_samples):
+        msg = Marker()
+        msg.header.frame_id = "odom"
+        msg.ns = "tracks"
+        msg.id = 0
+        msg.action = msg.ADD
+        msg.pose.orientation.w = 1.0
+        msg.type = msg.LINE_LIST
+        msg.points = []
+        msg.scale.x = 0.05
+        msg.color.a = 1.
+        msg.color.r = 1.
+        msg.color.g = 0.
+        msg.color.b = 0.
+
+        msg_arr = MarkerArray()
+
+        for k, v in predictions_samples.items():
+            msg.points = []
+            msg.points.extend(v)
+            msg.ns = "track_" + str(k)
+            msg_arr.markers.append(copy(msg))
+
+        self.predictions_marker_pub.publish(msg_arr)
 
     def spin(self):
         """
         docstring
         """
-        rate = rospy.Rate(10)
+        rate = rospy.Rate(30)
         while not rospy.is_shutdown():
             if self.tracked_persons:
                 self.predict_tracks()
