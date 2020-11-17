@@ -11,7 +11,7 @@ from sgan.models import TrajectoryGenerator
 from sgan.utils import relative_to_abs
 
 from geometry_msgs.msg import Point
-from spencer_tracking_msgs.msg import TrackedPersons, TrackedPerson
+from spencer_tracking_msgs.msg import TrackedPersons
 from visualization_msgs.msg import Marker, MarkerArray
 
 
@@ -28,37 +28,38 @@ class SGANNode(object):
         self.num_samples = rospy.get_param("num_samples", 20)
         self.seq_len = rospy.get_param("seq_len", 8)
         self.visualise = rospy.get_param("visualise", True)
-        self.generator = self.get_generator(checkpoint)
         self.args_ = AttrDict(checkpoint['args'])
+        self.generator = self.get_generator(checkpoint)
         self.tracked_persons_sub = rospy.Subscriber(
             "/spencer/perception/tracked_persons", TrackedPersons, self.tracked_persons_cb, queue_size=3)
         # self.predicted_tracks_pub = rospy.Publisher("/sgan/predictions", TBD, queue_size=1)
         self.predictions_marker_pub = rospy.Publisher("/sgan/predictions_marker", MarkerArray, queue_size=1)
         self.tracked_persons = {}
-        self.max_age = rospy.Duration(10)
 
     def get_generator(self, checkpoint):
-        args = AttrDict(checkpoint['args'])
+        #args = AttrDict(checkpoint['args'])
         generator = TrajectoryGenerator(
-            obs_len=args.obs_len,
-            pred_len=args.pred_len,
-            embedding_dim=args.embedding_dim,
-            encoder_h_dim=args.encoder_h_dim_g,
-            decoder_h_dim=args.decoder_h_dim_g,
-            mlp_dim=args.mlp_dim,
-            num_layers=args.num_layers,
-            noise_dim=args.noise_dim,
-            noise_type=args.noise_type,
-            noise_mix_type=args.noise_mix_type,
-            pooling_type=args.pooling_type,
-            pool_every_timestep=args.pool_every_timestep,
-            dropout=args.dropout,
-            bottleneck_dim=args.bottleneck_dim,
-            neighborhood_size=args.neighborhood_size,
-            grid_size=args.grid_size,
-            batch_norm=args.batch_norm)
+            obs_len=self.args_.obs_len,
+            pred_len=self.args_.pred_len,
+            embedding_dim=self.args_.embedding_dim,
+            encoder_h_dim=self.args_.encoder_h_dim_g,
+            decoder_h_dim=self.args_.decoder_h_dim_g,
+            mlp_dim=self.args_.mlp_dim,
+            num_layers=self.args_.num_layers,
+            noise_dim=self.args_.noise_dim,
+            noise_type=self.args_.noise_type,
+            noise_mix_type=self.args_.noise_mix_type,
+            pooling_type=self.args_.pooling_type,
+            pool_every_timestep=self.args_.pool_every_timestep,
+            dropout=self.args_.dropout,
+            bottleneck_dim=self.args_.bottleneck_dim,
+            neighborhood_size=self.args_.neighborhood_size,
+            grid_size=self.args_.grid_size,
+            batch_norm=self.args_.batch_norm,
+            use_gpu=self.args_.use_gpu)
         generator.load_state_dict(checkpoint['g_state'])
-        generator.cuda()
+        if self.args_.use_gpu:
+            generator.cuda()
         generator.train()
         return generator
 
@@ -112,15 +113,20 @@ class SGANNode(object):
                 valid_tracks = valid_tracks + 1
 
             if valid_tracks > 0:
-                curr_seq = torch.from_numpy(curr_seq[:, :valid_tracks, :]).float().cuda()
-                curr_seq_rel = torch.from_numpy(curr_seq_rel[:, :valid_tracks, :]).float().cuda()
+                curr_seq = torch.from_numpy(curr_seq[:, :valid_tracks, :]).float()
+                curr_seq_rel = torch.from_numpy(curr_seq_rel[:, :valid_tracks, :]).float()
+                if self.args_.use_gpu:
+                    curr_seq = curr_seq.cuda()
+                    curr_seq_rel = curr_seq_rel.cuda()
                 l = [valid_tracks]
                 cum_start_idx = [0] + np.cumsum(l).tolist()
                 seq_start_end = [
                     (start, end)
                     for start, end in zip(cum_start_idx, cum_start_idx[1:])
                 ]
-                seq_start_end = torch.Tensor(seq_start_end).type(torch.int).cuda()
+                seq_start_end = torch.Tensor(seq_start_end).type(torch.int)
+                if self.args_.use_gpu:
+                    seq_start_end = seq_start_end.cuda()
                 pred_samples = dict.fromkeys(self.tracked_persons.keys(), [])
                 track_ids = list(self.tracked_persons.keys())
 
@@ -163,7 +169,7 @@ class SGANNode(object):
         """
         docstring
         """
-        rate = rospy.Rate(30)
+        rate = rospy.Rate(5)
         while not rospy.is_shutdown():
             if self.tracked_persons:
                 self.predict_tracks()
