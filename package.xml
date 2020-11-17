@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>sgan_ros</name>
+  <version>0.1.0</version>
+  <description>The sgan_ros package</description>
+
+  <maintainer email="johannes.hackbarth@dfki.de">Johannes Hackbarth</maintainer>
+
+  <license>MIT</license>
+
+  <author>Agrim Gupta</author>
+  <author>Justin Johnson</author>
+
+  <buildtool_depend>catkin</buildtool_depend>
+  <buildtool_depend>catkin_virtualenv</buildtool_depend>
+  <build_depend>geometry_msgs</build_depend>
+  <build_depend>spencer_tracking_msgs</build_depend>
+  <build_depend>visualization_msgs</build_depend>
+  <build_export_depend>geometry_msgs</build_export_depend>
+  <build_export_depend>spencer_tracking_msgs</build_export_depend>
+  <build_export_depend>visualization_msgs</build_export_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>spencer_tracking_msgs</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
+  <depend>Pillow</depend>
+  <depend>numpy</depend>
+  <depend>torch</depend>
+  <depend>torchvision</depend>
+
+  <export>
+    <pip_requirements>requirements.txt</pip_requirements>
+  </export>
+</package>
