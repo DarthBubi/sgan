@@ -37,7 +37,6 @@ class SGANNode(object):
         self.tracked_persons = {}
 
     def get_generator(self, checkpoint):
-        #args = AttrDict(checkpoint['args'])
         generator = TrajectoryGenerator(
             obs_len=self.args_.obs_len,
             pred_len=self.args_.pred_len,
@@ -68,10 +67,11 @@ class SGANNode(object):
         docstring
         """
         for track in msg.tracks:
-            if track.track_id in self.tracked_persons:
-                self.tracked_persons[track.track_id].append(track)
-            else:
-                self.tracked_persons[track.track_id] = deque([track], maxlen=8)
+            if track.twist.twist.linear.x > 0 or track.twist.twist.linear.y > 0:
+                if track.track_id in self.tracked_persons:
+                    self.tracked_persons[track.track_id].append(track)
+                else:
+                    self.tracked_persons[track.track_id] = deque([track], maxlen=8)
 
         current_ids = [track.track_id for track in msg.tracks]
         msg_arr = MarkerArray()
